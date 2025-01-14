@@ -1,0 +1,12 @@
+[build]
+builder = "nixpacks"
+buildCommand = "cd frontend && npm install && npm run build && cd .. && cp -r frontend/build backend/static"
+
+[deploy]
+startCommand = "cd backend && python app.py"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+
+[deploy.envs]
+FLASK_ENV = "production"
