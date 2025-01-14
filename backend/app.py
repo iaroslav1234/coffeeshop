@@ -788,7 +788,11 @@ def get_profit_report():
 
 @app.route('/api/health')
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    return jsonify({
+        "status": "healthy",
+        "version": "1.0.1",
+        "message": "Coffee Shop Manager is running!"
+    }), 200
 
 # Create all tables
 with app.app_context():
@@ -812,6 +816,6 @@ with app.app_context():
         db.session.commit()
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 5001))
     debug = os.environ.get('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug)
