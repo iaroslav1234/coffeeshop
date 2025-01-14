@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: coffee-shop-manager-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: coffee_shop_db
+          property: connectionString
+
+databases:
+  - name: coffee_shop_db
+    ipAllowList: []
