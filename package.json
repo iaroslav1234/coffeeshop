@@ -1,0 +1,11 @@
+{
+  "name": "coffee-shop-manager",
+  "version": "1.0.0",
+  "description": "Coffee Shop Management System",
+  "scripts": {
+    "start": "cd backend && python app.py"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

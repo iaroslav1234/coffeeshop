@@ -14,13 +14,40 @@ import Navbar from './components/Navbar';
 const theme = createTheme({
   palette: {
     primary: {
-      main: '#795548', // Coffee brown
+      main: '#7c4dff', // Purple instead of brown
+      light: '#9575cd',
+      dark: '#6c3fff',
     },
     secondary: {
-      main: '#4CAF50', // Green for profit indicators
+      main: '#4CAF50', // Keep green for profit indicators
     },
     background: {
-      default: '#f5f5f5',
+      default: '#e0f7fa',
+      paper: 'rgba(255, 255, 255, 0.95)',
+    },
+    text: {
+      primary: '#333333',
+      secondary: '#666666',
+    },
+  },
+  components: {
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+          boxShadow: '0 8px 32px 0 rgba(147, 147, 247, 0.1)',
+        },
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        containedPrimary: {
+          background: 'linear-gradient(45deg, #9575cd, #7c4dff)',
+          '&:hover': {
+            background: 'linear-gradient(45deg, #7c4dff, #6c3fff)',
+          },
+        },
+      },
     },
   },
 });

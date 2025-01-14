@@ -44,9 +44,9 @@ const formatDate = (date) => {
 };
 
 const formatCurrency = (amount) => {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('th-TH', {
     style: 'currency',
-    currency: 'USD'
+    currency: 'THB'
   }).format(amount);
 };
 
@@ -159,11 +159,26 @@ const Sales = () => {
   };
 
   return (
-    <Box p={3}>
+    <Box 
+      p={3} 
+      sx={{
+        background: 'linear-gradient(135deg, #e0f7fa 0%, #f3e5f5 100%)',
+        minHeight: '100vh'
+      }}
+    >
       <Grid container spacing={3}>
         {/* Left side - Product Selection */}
         <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 2, mb: 2 }}>
+          <Paper 
+            sx={{ 
+              p: 2, 
+              mb: 2,
+              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+              backdropFilter: 'blur(10px)',
+              borderRadius: '16px',
+              boxShadow: '0 8px 32px 0 rgba(147, 147, 247, 0.1)'
+            }}
+          >
             <Stack direction="row" spacing={2} alignItems="center" mb={2}>
               <TextField
                 placeholder="Search products..."

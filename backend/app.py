@@ -786,6 +786,10 @@ def get_profit_report():
         print('Error getting profit report:', str(e))
         return jsonify({'message': f'Error getting profit report: {str(e)}'}), 500
 
+@app.route('/api/health')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
 # Create all tables
 with app.app_context():
     # Drop all tables first
@@ -808,4 +812,6 @@ with app.app_context():
         db.session.commit()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True, port=5001)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
