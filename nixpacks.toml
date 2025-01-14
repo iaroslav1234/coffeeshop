@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ['python3', 'postgresql', 'gcc', 'nodejs']
+
+[phases.install]
+cmds = [
+    'python -m venv --copies /opt/venv && . /opt/venv/bin/activate && pip install -r requirements.txt',
+    'cd frontend && npm install && npm run build && cd ..'
+]
+
+[start]
+cmd = 'cd backend && python app.py'
