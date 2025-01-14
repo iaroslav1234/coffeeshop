@@ -1,11 +1,19 @@
 {
-  "name": "coffee-shop-manager",
+  "name": "coffee-shop-app",
   "version": "1.0.0",
-  "description": "Coffee Shop Management System",
+  "main": "index.js",
   "scripts": {
-    "start": "cd backend && python app.py"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "express": "^4.21.0"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   }
 }
