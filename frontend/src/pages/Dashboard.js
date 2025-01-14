@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Grid, Paper, Typography, Alert, Box } from '@mui/material';
 import axios from 'axios';
 
+const API_URL = process.env.REACT_APP_API_URL;
+
 const Dashboard = () => {
   const [lowStockAlerts, setLowStockAlerts] = useState([]);
   const [financeOverview, setFinanceOverview] = useState(null);
@@ -10,11 +12,11 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
       try {
         // Fetch low stock alerts
-        const alertsResponse = await axios.get('http://localhost:5001/api/low-stock-alerts');
+        const alertsResponse = await axios.get(`${API_URL}/low-stock-alerts`);
         setLowStockAlerts(alertsResponse.data);
 
         // Fetch finance overview
-        const financeResponse = await axios.get('http://localhost:5001/api/finance');
+        const financeResponse = await axios.get(`${API_URL}/finance`);
         setFinanceOverview(financeResponse.data);
       } catch (error) {
         console.error('Error fetching dashboard data:', error);

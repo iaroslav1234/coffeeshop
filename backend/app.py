@@ -218,7 +218,7 @@ def handle_ingredients():
         'low_stock': i.get_stock_in_base_unit() <= i.get_threshold_in_base_unit()
     } for i in ingredients])
 
-@app.route('/api/ingredients/<int:id>', methods=['PUT', 'DELETE'])
+@app.route('/api/ingredients/<int:id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_ingredient(id):
     ingredient = Ingredient.query.get_or_404(id)
     
@@ -514,7 +514,7 @@ def handle_product(id):
             db.session.rollback()
             return jsonify({'message': f'Error deleting product: {str(e)}'}), 500
 
-@app.route('/api/products/categories', methods=['GET'])
+@app.route('/api/product-categories', methods=['GET'])
 def get_product_categories():
     categories = db.session.query(Product.category).distinct().all()
     return jsonify([category[0] for category in categories])
@@ -678,7 +678,7 @@ def get_finance_overview():
         'current_balance': overview.current_balance
     })
 
-@app.route('/api/finance/profit', methods=['GET'])
+@app.route('/api/profit-report', methods=['GET'])
 def get_profit_report():
     try:
         period = request.args.get('period', 'daily')  # daily, weekly, or monthly
@@ -794,17 +794,13 @@ def health_check():
         "message": "Coffee Shop Manager is running!"
     }), 200
 
-# Serve React App
-@app.route('/')
-def serve():
-    return send_from_directory(app.static_folder, 'index.html')
-
+# Serve React App - this should be after all API routes
+@app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
-def serve_path(path):
+def serve(path):
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
+    return send_from_directory(app.static_folder, 'index.html')
 
 # Create all tables
 with app.app_context():
