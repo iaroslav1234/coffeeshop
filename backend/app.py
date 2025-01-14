@@ -1,8 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
 from flask_cors import CORS
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 
@@ -16,7 +15,6 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///coffee_shop.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
-migrate = Migrate(app, db)
 
 # Helper function for unit conversion
 def convert_to_base_unit(value, from_unit):
@@ -680,17 +678,134 @@ def get_finance_overview():
         'current_balance': overview.current_balance
     })
 
+@app.route('/api/finance/profit', methods=['GET'])
+def get_profit_report():
+    try:
+        period = request.args.get('period', 'daily')  # daily, weekly, or monthly
+        selected_date = request.args.get('date')
+        
+        if selected_date:
+            selected_date = datetime.fromisoformat(selected_date.replace('Z', '+00:00'))
+        else:
+            selected_date = datetime.utcnow()
+            
+        if period == 'daily':
+            start_date = selected_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=1)
+            group_format = '%Y-%m-%d %H:00:00'
+            interval = 'hour'
+        elif period == 'weekly':
+            # Start from Monday of the selected week
+            start_date = selected_date - timedelta(days=selected_date.weekday())
+            start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_date = start_date + timedelta(days=7)
+            group_format = '%Y-%m-%d'
+            interval = 'day'
+        else:  # monthly
+            # Start from first day of the selected month
+            start_date = selected_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            # Go to first day of next month
+            if start_date.month == 12:
+                end_date = start_date.replace(year=start_date.year + 1, month=1)
+            else:
+                end_date = start_date.replace(month=start_date.month + 1)
+            group_format = '%Y-%m-%d'
+            interval = 'day'
+
+        # Get all sales in the period
+        sales = Sale.query.filter(
+            Sale.date >= start_date,
+            Sale.date < end_date
+        ).all()
+
+        # Calculate profits
+        profits = {}
+        total_revenue = 0
+        total_cost = 0
+        
+        # Initialize all intervals in the range
+        current = start_date
+        while current < end_date:
+            key = current.strftime(group_format)
+            profits[key] = {
+                'revenue': 0,
+                'cost': 0,
+                'profit': 0,
+                'sales_count': 0
+            }
+            if interval == 'hour':
+                current += timedelta(hours=1)
+            else:
+                current += timedelta(days=1)
+        
+        for sale in sales:
+            # Get the date key based on the interval
+            date_key = sale.date.strftime(group_format)
+            
+            # Calculate metrics for this sale
+            metrics = sale.calculate_metrics()
+            revenue = metrics['revenue']
+            cost = metrics['cost']
+            profit = metrics['profit']
+            
+            # Add to totals
+            total_revenue += revenue
+            total_cost += cost
+            
+            # Group by interval
+            if date_key in profits:
+                profits[date_key]['revenue'] += revenue
+                profits[date_key]['cost'] += cost
+                profits[date_key]['profit'] += profit
+                profits[date_key]['sales_count'] += 1
+
+        # Convert to list and sort by date
+        profit_data = [
+            {
+                'date': key,
+                'revenue': data['revenue'],
+                'cost': data['cost'],
+                'profit': data['profit'],
+                'sales_count': data['sales_count']
+            }
+            for key, data in profits.items()
+        ]
+        profit_data.sort(key=lambda x: x['date'])
+
+        return jsonify({
+            'period': period,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat(),
+            'total_revenue': total_revenue,
+            'total_cost': total_cost,
+            'total_profit': total_revenue - total_cost,
+            'data': profit_data
+        })
+
+    except Exception as e:
+        print('Error getting profit report:', str(e))
+        return jsonify({'message': f'Error getting profit report: {str(e)}'}), 500
+
 # Create all tables
 with app.app_context():
+    # Drop all tables first
+    db.drop_all()
+    # Create all tables
     db.create_all()
     
     # Create default categories if they don't exist
-    default_categories = ['Coffee Beans', 'Milk & Dairy', 'Syrups', 'Tea', 'Other']
-    for name in default_categories:
-        if not IngredientCategory.query.filter_by(name=name).first():
-            category = IngredientCategory(name=name)
+    if not IngredientCategory.query.first():
+        default_categories = [
+            'Coffee Beans',
+            'Milk & Dairy',
+            'Syrups',
+            'Toppings',
+            'Supplies'
+        ]
+        for category_name in default_categories:
+            category = IngredientCategory(name=category_name)
             db.session.add(category)
-    db.session.commit()
+        db.session.commit()
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(host='0.0.0.0', debug=True, port=5001)

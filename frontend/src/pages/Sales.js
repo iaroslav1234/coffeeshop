@@ -10,21 +10,25 @@ import {
   TableHead,
   TableRow,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Grid,
   IconButton,
   Stack,
-  Alert
+  Alert,
+  Card,
+  CardContent,
+  Chip,
+  Divider,
+  TextField,
+  InputAdornment,
+  Snackbar
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Remove as RemoveIcon,
+  Delete as DeleteIcon,
+  Search as SearchIcon,
+  ShoppingCart as CartIcon
+} from '@mui/icons-material';
 import axios from 'axios';
 
 const formatDate = (date) => {
@@ -39,17 +43,21 @@ const formatDate = (date) => {
   });
 };
 
+const formatCurrency = (amount) => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  }).format(amount);
+};
+
 const Sales = () => {
   const [sales, setSales] = useState([]);
   const [products, setProducts] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [filterStartDate, setFilterStartDate] = useState('');
-  const [filterEndDate, setFilterEndDate] = useState('');
-  const [formData, setFormData] = useState({
-    date: new Date().toISOString().split('T')[0],
-    product_id: '',
-    quantity: 1
-  });
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [cart, setCart] = useState([]);
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   useEffect(() => {
     fetchSales();
@@ -61,7 +69,7 @@ const Sales = () => {
       const response = await axios.get('http://localhost:5001/api/sales');
       setSales(response.data);
     } catch (error) {
-      console.error('Error fetching sales:', error);
+      showSnackbar('Error fetching sales', 'error');
     }
   };
 
@@ -69,215 +77,266 @@ const Sales = () => {
     try {
       const response = await axios.get('http://localhost:5001/api/products');
       setProducts(response.data);
+      
+      // Extract unique categories
+      const uniqueCategories = [...new Set(response.data.map(product => product.category))];
+      setCategories(uniqueCategories);
     } catch (error) {
-      console.error('Error fetching products:', error);
+      showSnackbar('Error fetching products', 'error');
     }
   };
 
-  const handleOpen = () => {
-    setOpen(true);
-    setFormData({
-      date: new Date().toISOString().split('T')[0],
-      product_id: '',
-      quantity: 1
+  const handleAddToCart = (product) => {
+    setCart(prevCart => {
+      const existingItem = prevCart.find(item => item.product_id === product.id);
+      if (existingItem) {
+        return prevCart.map(item =>
+          item.product_id === product.id
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        );
+      }
+      return [...prevCart, {
+        product_id: product.id,
+        name: product.name,
+        price: product.selling_price,
+        quantity: 1
+      }];
+    });
+    showSnackbar('Added to cart');
+  };
+
+  const handleUpdateQuantity = (productId, change) => {
+    setCart(prevCart => {
+      return prevCart.map(item => {
+        if (item.product_id === productId) {
+          const newQuantity = Math.max(0, item.quantity + change);
+          return newQuantity === 0 ? null : { ...item, quantity: newQuantity };
+        }
+        return item;
+      }).filter(Boolean);
     });
   };
 
-  const handleClose = () => {
-    setOpen(false);
+  const handleRemoveFromCart = (productId) => {
+    setCart(prevCart => prevCart.filter(item => item.product_id !== productId));
+    showSnackbar('Removed from cart');
   };
 
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-  };
-
-  const handleSubmit = async () => {
+  const handleCheckout = async () => {
     try {
-      const data = {
-        ...formData,
-        date: new Date(formData.date).toISOString()
-      };
-      await axios.post('http://localhost:5001/api/sales', data);
-      handleClose();
+      for (const item of cart) {
+        await axios.post('http://localhost:5001/api/sales', {
+          product_id: item.product_id,
+          quantity: item.quantity,
+          date: new Date().toISOString()
+        });
+      }
+      setCart([]);
       fetchSales();
+      showSnackbar('Sale completed successfully');
     } catch (error) {
-      console.error('Error creating sale:', error);
+      showSnackbar('Error processing sale', 'error');
     }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this sale?')) {
-      try {
-        await axios.delete(`http://localhost:5001/api/sales/${id}`);
-        fetchSales();
-      } catch (error) {
-        console.error('Error deleting sale:', error);
-      }
-    }
+  const showSnackbar = (message, severity = 'success') => {
+    setSnackbar({ open: true, message, severity });
   };
 
-  const getFilteredSales = () => {
-    if (!filterStartDate && !filterEndDate) return sales;
-
-    return sales.filter(sale => {
-      const saleDate = new Date(sale.date);
-      if (filterStartDate && filterEndDate) {
-        return saleDate >= new Date(filterStartDate) && saleDate <= new Date(filterEndDate);
-      } else if (filterStartDate) {
-        return saleDate >= new Date(filterStartDate);
-      } else {
-        return saleDate <= new Date(filterEndDate);
-      }
-    });
+  const handleCloseSnackbar = () => {
+    setSnackbar(prev => ({ ...prev, open: false }));
   };
 
-  const calculateTotalRevenue = (sales) => {
-    return sales.reduce((sum, sale) => sum + sale.revenue, 0);
-  };
+  const filteredProducts = products
+    .filter(product => 
+      (selectedCategory === 'all' || product.category === selectedCategory) &&
+      (searchQuery === '' || product.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
 
-  const calculateTotalProfit = (sales) => {
-    return sales.reduce((sum, sale) => sum + sale.profit, 0);
+  const calculateTotal = () => {
+    return cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   };
-
-  const filteredSales = getFilteredSales();
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h4">Sales</Typography>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={handleOpen}
-        >
-          Add Sale
-        </Button>
-      </Box>
-
-      <Paper sx={{ p: 2, mb: 3 }}>
-        <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} sm={4}>
-            <TextField
-              fullWidth
-              type="date"
-              label="Start Date"
-              value={filterStartDate}
-              onChange={(e) => setFilterStartDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <TextField
-              fullWidth
-              type="date"
-              label="End Date"
-              value={filterEndDate}
-              onChange={(e) => setFilterEndDate(e.target.value)}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <Stack spacing={1}>
-              <Typography variant="subtitle2">
-                Total Revenue: ฿{calculateTotalRevenue(filteredSales).toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-              </Typography>
-              <Typography variant="subtitle2">
-                Total Profit: ฿{calculateTotalProfit(filteredSales).toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-              </Typography>
+    <Box p={3}>
+      <Grid container spacing={3}>
+        {/* Left side - Product Selection */}
+        <Grid item xs={12} md={8}>
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Stack direction="row" spacing={2} alignItems="center" mb={2}>
+              <TextField
+                placeholder="Search products..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon />
+                    </InputAdornment>
+                  ),
+                }}
+                sx={{ flexGrow: 1 }}
+              />
             </Stack>
-          </Grid>
+            
+            <Stack direction="row" spacing={1} mb={2} sx={{ overflowX: 'auto', pb: 1 }}>
+              <Chip
+                label="All"
+                onClick={() => setSelectedCategory('all')}
+                color={selectedCategory === 'all' ? 'primary' : 'default'}
+              />
+              {categories.map(category => (
+                <Chip
+                  key={category}
+                  label={category}
+                  onClick={() => setSelectedCategory(category)}
+                  color={selectedCategory === category ? 'primary' : 'default'}
+                />
+              ))}
+            </Stack>
+
+            <Grid container spacing={2}>
+              {filteredProducts.map(product => (
+                <Grid item xs={12} sm={6} md={4} key={product.id}>
+                  <Card 
+                    sx={{ 
+                      cursor: 'pointer',
+                      '&:hover': { transform: 'scale(1.02)', transition: 'transform 0.2s' }
+                    }}
+                    onClick={() => handleAddToCart(product)}
+                  >
+                    <CardContent>
+                      <Typography variant="h6" noWrap>{product.name}</Typography>
+                      <Typography color="textSecondary" gutterBottom>{product.category}</Typography>
+                      <Typography variant="h6" color="primary">
+                        {formatCurrency(product.selling_price)}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Paper>
         </Grid>
-      </Paper>
 
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Date</TableCell>
-              <TableCell>Product</TableCell>
-              <TableCell>Quantity</TableCell>
-              <TableCell>Cost</TableCell>
-              <TableCell>Revenue</TableCell>
-              <TableCell>Profit</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {filteredSales.map((sale) => (
-              <TableRow key={sale.id}>
-                <TableCell>{formatDate(sale.date)}</TableCell>
-                <TableCell>{sale.product_name}</TableCell>
-                <TableCell>{sale.quantity}</TableCell>
-                <TableCell>฿{sale.cost.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</TableCell>
-                <TableCell>฿{sale.revenue.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</TableCell>
-                <TableCell>฿{sale.profit.toLocaleString('th-TH', { minimumFractionDigits: 2 })}</TableCell>
-                <TableCell>
-                  <IconButton onClick={() => handleDelete(sale.id)} size="small">
-                    <DeleteIcon />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+        {/* Right side - Cart */}
+        <Grid item xs={12} md={4}>
+          <Paper sx={{ p: 2, position: 'sticky', top: 16 }}>
+            <Typography variant="h6" gutterBottom>
+              Current Order
+            </Typography>
+            
+            {cart.length === 0 ? (
+              <Typography color="textSecondary" align="center" py={4}>
+                Cart is empty
+              </Typography>
+            ) : (
+              <>
+                {cart.map(item => (
+                  <Box key={item.product_id} mb={2}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Typography variant="subtitle1">{item.name}</Typography>
+                      <IconButton 
+                        size="small" 
+                        color="error"
+                        onClick={() => handleRemoveFromCart(item.product_id)}
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </Stack>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center">
+                      <Stack direction="row" alignItems="center" spacing={1}>
+                        <IconButton 
+                          size="small"
+                          onClick={() => handleUpdateQuantity(item.product_id, -1)}
+                        >
+                          <RemoveIcon />
+                        </IconButton>
+                        <Typography>{item.quantity}</Typography>
+                        <IconButton 
+                          size="small"
+                          onClick={() => handleUpdateQuantity(item.product_id, 1)}
+                        >
+                          <AddIcon />
+                        </IconButton>
+                      </Stack>
+                      <Typography>
+                        {formatCurrency(item.price * item.quantity)}
+                      </Typography>
+                    </Stack>
+                    <Divider sx={{ mt: 1 }} />
+                  </Box>
+                ))}
 
-      <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Sale</DialogTitle>
-        <DialogContent>
-          <Grid container spacing={2} sx={{ mt: 1 }}>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                type="date"
-                label="Date"
-                name="date"
-                value={formData.date}
-                onChange={handleInputChange}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <FormControl fullWidth>
-                <InputLabel>Product</InputLabel>
-                <Select
-                  name="product_id"
-                  value={formData.product_id}
-                  onChange={handleInputChange}
-                  label="Product"
-                >
-                  {products.map((product) => (
-                    <MenuItem key={product.id} value={product.id}>
-                      {product.name} - ฿{product.selling_price}
-                    </MenuItem>
+                <Stack spacing={2} mt={2}>
+                  <Box display="flex" justifyContent="space-between">
+                    <Typography variant="h6">Total:</Typography>
+                    <Typography variant="h6">{formatCurrency(calculateTotal())}</Typography>
+                  </Box>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    startIcon={<CartIcon />}
+                    onClick={handleCheckout}
+                    fullWidth
+                  >
+                    Complete Sale
+                  </Button>
+                </Stack>
+              </>
+            )}
+          </Paper>
+        </Grid>
+
+        {/* Sales History */}
+        <Grid item xs={12}>
+          <Paper sx={{ p: 2 }}>
+            <Typography variant="h6" gutterBottom>
+              Recent Sales
+            </Typography>
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Date</TableCell>
+                    <TableCell>Product</TableCell>
+                    <TableCell align="right">Quantity</TableCell>
+                    <TableCell align="right">Total</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sales.slice(0, 5).map((sale) => (
+                    <TableRow key={sale.id}>
+                      <TableCell>{formatDate(sale.date)}</TableCell>
+                      <TableCell>
+                        {products.find(p => p.id === sale.product_id)?.name || 'Unknown Product'}
+                      </TableCell>
+                      <TableCell align="right">{sale.quantity}</TableCell>
+                      <TableCell align="right">
+                        {formatCurrency(
+                          sale.quantity * (products.find(p => p.id === sale.product_id)?.selling_price || 0)
+                        )}
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Quantity"
-                name="quantity"
-                type="number"
-                value={formData.quantity}
-                onChange={handleInputChange}
-                inputProps={{ min: 1 }}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleClose}>Cancel</Button>
-          <Button onClick={handleSubmit} variant="contained">
-            Add Sale
-          </Button>
-        </DialogActions>
-      </Dialog>
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        </Grid>
+      </Grid>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3000}
+        onClose={handleCloseSnackbar}
+      >
+        <Alert onClose={handleCloseSnackbar} severity={snackbar.severity}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
