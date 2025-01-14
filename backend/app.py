@@ -1,9 +1,14 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -798,19 +803,43 @@ def health_check():
         "message": "Coffee Shop Manager is running!"
     }), 200
 
+# Error handlers
+@app.errorhandler(404)
+def not_found_error(error):
+    logger.error(f"404 error: {error}")
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Not found'}), 404
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"500 error: {error}")
+    db.session.rollback()
+    return jsonify({'error': 'Internal server error'}), 500
+
+# Root path handler
+@app.route('/')
+def index():
+    try:
+        logger.info("Serving index.html")
+        return send_from_directory(app.static_folder, 'index.html')
+    except Exception as e:
+        logger.error(f"Error serving index: {str(e)}")
+        return Response("Application is running", mimetype='text/plain')
+
 # Serve React App - this should be after all API routes
-@app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
     try:
+        logger.info(f"Serving path: {path}")
         if path.startswith('api/'):
             return jsonify({'error': 'Not found'}), 404
-        if path and os.path.exists(os.path.join(app.static_folder, path)):
+        if os.path.exists(os.path.join(app.static_folder, path)):
             return send_from_directory(app.static_folder, path)
         return send_from_directory(app.static_folder, 'index.html')
     except Exception as e:
-        app.logger.error(f"Error serving path {path}: {str(e)}")
-        return jsonify({'status': 'ok'}), 200  # Fallback for health check
+        logger.error(f"Error serving {path}: {str(e)}")
+        return send_from_directory(app.static_folder, 'index.html')
 
 if __name__ == '__main__':
     with app.app_context():
