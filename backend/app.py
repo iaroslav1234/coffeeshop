@@ -808,22 +808,28 @@ with app.app_context():
     db.drop_all()
     # Create all tables
     db.create_all()
-    
-    # Create default categories if they don't exist
+
+    # Add some initial data
     if not IngredientCategory.query.first():
-        default_categories = [
-            'Coffee Beans',
-            'Milk & Dairy',
-            'Syrups',
-            'Toppings',
-            'Supplies'
+        categories = [
+            IngredientCategory(name='Coffee Beans'),
+            IngredientCategory(name='Milk'),
+            IngredientCategory(name='Syrups'),
+            IngredientCategory(name='Toppings')
         ]
-        for category_name in default_categories:
-            category = IngredientCategory(name=category_name)
-            db.session.add(category)
+        db.session.add_all(categories)
+        db.session.commit()
+
+    if not FinanceOverview.query.first():
+        overview = FinanceOverview(
+            starting_balance=10000.0,
+            total_income=0.0,
+            total_expenses=0.0,
+            current_balance=10000.0
+        )
+        db.session.add(overview)
         db.session.commit()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
-    debug = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host='0.0.0.0', port=port)
