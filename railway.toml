@@ -4,9 +4,10 @@ buildCommand = "sh ./build.sh"
 
 [deploy]
 startCommand = "sh ./start.sh"
-healthcheckPath = "/api/health"
-healthcheckTimeout = 300
+healthcheckPath = "/"
+healthcheckTimeout = 600
 restartPolicyType = "ON_FAILURE"
 
 [deploy.envs]
 FLASK_ENV = "production"
+PORT = "8080"
