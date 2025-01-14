@@ -1,9 +1,9 @@
 [build]
 builder = "nixpacks"
-buildCommand = "cd frontend && npm install && npm run build && cd .. && cp -r frontend/build backend/static"
+buildCommand = "npm --prefix frontend install && npm --prefix frontend run build && mkdir -p backend/static && cp -r frontend/build/* backend/static/"
 
 [deploy]
-startCommand = "cd backend && python app.py"
+startCommand = "python backend/app.py"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
