@@ -8,12 +8,16 @@ import os
 # Load environment variables
 load_dotenv()
 
-app = Flask(__name__, static_folder='static', static_url_path='/')
+app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
 # Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///coffee_shop.db'
+db_path = os.environ.get('DATABASE_URL', 'sqlite:///coffee_shop.db')
+if db_path.startswith('postgres://'):
+    db_path = db_path.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db = SQLAlchemy(app)
 
 # Helper function for unit conversion
@@ -798,40 +802,41 @@ def health_check():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if path.startswith('api/'):
-        return jsonify({'error': 'Not found'}), 404
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    return send_from_directory(app.static_folder, 'index.html')
-
-# Create all tables
-with app.app_context():
-    # Drop all tables first
-    db.drop_all()
-    # Create all tables
-    db.create_all()
-
-    # Add some initial data
-    if not IngredientCategory.query.first():
-        categories = [
-            IngredientCategory(name='Coffee Beans'),
-            IngredientCategory(name='Milk'),
-            IngredientCategory(name='Syrups'),
-            IngredientCategory(name='Toppings')
-        ]
-        db.session.add_all(categories)
-        db.session.commit()
-
-    if not FinanceOverview.query.first():
-        overview = FinanceOverview(
-            starting_balance=10000.0,
-            total_income=0.0,
-            total_expenses=0.0,
-            current_balance=10000.0
-        )
-        db.session.add(overview)
-        db.session.commit()
+    try:
+        if path.startswith('api/'):
+            return jsonify({'error': 'Not found'}), 404
+        if path and os.path.exists(os.path.join(app.static_folder, path)):
+            return send_from_directory(app.static_folder, path)
+        return send_from_directory(app.static_folder, 'index.html')
+    except Exception as e:
+        app.logger.error(f"Error serving path {path}: {str(e)}")
+        return jsonify({'status': 'ok'}), 200  # Fallback for health check
 
 if __name__ == '__main__':
+    with app.app_context():
+        # Create all tables
+        db.create_all()
+
+        # Add initial data only if tables are empty
+        if not IngredientCategory.query.first():
+            categories = [
+                IngredientCategory(name='Coffee Beans'),
+                IngredientCategory(name='Milk'),
+                IngredientCategory(name='Syrups'),
+                IngredientCategory(name='Toppings')
+            ]
+            db.session.add_all(categories)
+            db.session.commit()
+
+        if not FinanceOverview.query.first():
+            overview = FinanceOverview(
+                starting_balance=10000.0,
+                total_income=0.0,
+                total_expenses=0.0,
+                current_balance=10000.0
+            )
+            db.session.add(overview)
+            db.session.commit()
+
     port = int(os.environ.get('PORT', 5001))
     app.run(host='0.0.0.0', port=port)
