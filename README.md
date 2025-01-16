@@ -72,3 +72,10 @@ Both servers feature hot-reloading:
   - Track revenue and expenses
   - Generate financial reports
   - Profit analysis
+
+## Recent Updates
+
+- Fixed unit conversion and cost calculation issues (Jan 16, 2025)
+  - Corrected stock deduction to handle kg/g conversions properly
+  - Fixed cost display to show correct prices (60 baht/kg instead of 60,000)
+  - Fixed inventory to store exact values without unnecessary conversions
