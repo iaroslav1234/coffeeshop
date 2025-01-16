@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from flask_migrate import Migrate
 import os
 import logging
 
@@ -24,37 +25,39 @@ app.config['SQLALCHEMY_DATABASE_URI'] = db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # Helper function for unit conversion
 def convert_to_base_unit(value, from_unit):
     """Convert a value to its base unit (g or ml)"""
     if from_unit == 'kg':
-        return value * 1000  # Convert to grams
+        return value * 1000  # Convert to grams (1 kg = 1000g)
     elif from_unit == 'l':
-        return value * 1000  # Convert to milliliters
-    return value
+        return value * 1000  # Convert to milliliters (1 l = 1000ml)
+    return value  # Already in base unit (g or ml)
 
 def convert_from_base_unit(value, to_unit):
     """Convert a value from its base unit (g or ml) to the target unit"""
     if to_unit == 'kg':
-        return value / 1000  # Convert from grams
+        return value / 1000  # Convert from grams to kg (1000g = 1 kg)
     elif to_unit == 'l':
-        return value / 1000  # Convert from milliliters
-    return value
+        return value / 1000  # Convert from milliliters to l (1000ml = 1 l)
+    return value  # Keep in base unit (g or ml)
 
 def calculate_ingredient_cost(ingredient, quantity, unit):
     """Calculate the cost of an ingredient with proper unit conversion"""
-    # Convert quantity to base unit (g or ml)
+    # Convert ingredient quantity to base unit (g or ml)
     base_quantity = convert_to_base_unit(quantity, unit)
     
-    # Get the cost per base unit
-    if ingredient.cost_unit in ['kg', 'l']:
-        # If cost is per kg/l, convert to cost per g/ml
-        base_cost = ingredient.cost_per_unit / 1000
-    else:
-        base_cost = ingredient.cost_per_unit
+    # Get cost in base unit
+    base_cost = ingredient.current_cost_per_unit
+    if ingredient.cost_unit == 'kg':
+        base_cost = base_cost / 1000  # Convert from per kg to per g
+    elif ingredient.cost_unit == 'l':
+        base_cost = base_cost / 1000  # Convert from per l to per ml
     
-    return base_cost * base_quantity
+    # Calculate total cost
+    return base_quantity * base_cost
 
 # Models
 class Product(db.Model):
@@ -68,18 +71,16 @@ class Product(db.Model):
     sales = db.relationship('Sale', backref='product_ref', lazy=True)
 
     def calculate_cost(self):
+        """Calculate the total cost of the product based on its ingredients"""
         total_cost = 0
         for ingredient in self.ingredients:
-            ingredient_cost = calculate_ingredient_cost(
-                ingredient.ingredient_ref,
-                ingredient.quantity,
-                ingredient.unit
-            )
-            total_cost += ingredient_cost
-        return total_cost
+            total_cost += calculate_ingredient_cost(ingredient.ingredient_ref, ingredient.quantity, ingredient.unit)
+        return round(total_cost, 2)
 
     def calculate_profit(self):
-        return self.selling_price - self.calculate_cost()
+        """Calculate the profit margin of the product"""
+        cost = self.calculate_cost()
+        return round(self.selling_price - cost, 2)
 
 class IngredientCategory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -90,20 +91,28 @@ class Ingredient(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     category_id = db.Column(db.Integer, db.ForeignKey('ingredient_category.id'), nullable=False)
-    current_stock = db.Column(db.Float, nullable=False)
-    stock_unit = db.Column(db.String(20), nullable=False)
+    current_stock = db.Column(db.Float, nullable=False, default=0)
+    stock_unit = db.Column(db.String(10), nullable=False)  # 'g', 'ml'
     min_threshold = db.Column(db.Float, nullable=False)
-    threshold_unit = db.Column(db.String(20), nullable=False)
-    cost_per_unit = db.Column(db.Float, nullable=False)
-    cost_unit = db.Column(db.String(20), nullable=False)
+    threshold_unit = db.Column(db.String(10), nullable=False)  # 'g', 'ml'
+    current_cost_per_unit = db.Column(db.Float, nullable=False)  # Current price, can be updated without affecting history
+    cost_unit = db.Column(db.String(10), nullable=False)  # 'g', 'ml'
     products = db.relationship('ProductIngredient', backref='ingredient_ref', lazy=True)
     stock_updates = db.relationship('StockUpdate', backref='ingredient', lazy=True)
 
-    def get_stock_in_base_unit(self):
-        return convert_to_base_unit(self.current_stock, self.stock_unit)
-
-    def get_threshold_in_base_unit(self):
-        return convert_to_base_unit(self.min_threshold, self.threshold_unit)
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'category_id': self.category_id,
+            'category_name': self.category_ref.name,
+            'current_stock': self.current_stock,
+            'stock_unit': self.stock_unit,
+            'min_threshold': self.min_threshold,
+            'threshold_unit': self.threshold_unit,
+            'current_cost_per_unit': self.current_cost_per_unit,
+            'cost_unit': self.cost_unit
+        }
 
 class ProductIngredient(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -116,10 +125,11 @@ class StockUpdate(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     ingredient_id = db.Column(db.Integer, db.ForeignKey('ingredient.id'), nullable=False)
     quantity = db.Column(db.Float, nullable=False)
-    cost_per_unit = db.Column(db.Float, nullable=False)
-    total_cost = db.Column(db.Float, nullable=False)
+    original_unit = db.Column(db.String(10), nullable=False)
+    original_cost_per_unit = db.Column(db.Float, nullable=False)
+    cost_unit = db.Column(db.String(10), nullable=False)
     date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    notes = db.Column(db.String(200))
+    notes = db.Column(db.Text)
 
 class Sale(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -128,18 +138,49 @@ class Sale(db.Model):
     quantity = db.Column(db.Integer, nullable=False)
 
     def calculate_metrics(self):
-        if not self.product_ref:
-            return None
+        try:
+            if not self.product_ref:
+                print(f"No product reference found for sale {self.id}")
+                return {
+                    'cost': 0,
+                    'revenue': 0,
+                    'profit': 0
+                }
+
+            # Get the selling price and quantity
+            selling_price = float(self.product_ref.selling_price)
+            quantity = int(self.quantity)
+            revenue = selling_price * quantity
             
-        cost = self.product_ref.calculate_cost() * self.quantity
-        revenue = self.product_ref.selling_price * self.quantity
-        profit = revenue - cost
-        
-        return {
-            'cost': cost,
-            'revenue': revenue,
-            'profit': profit
-        }
+            print(f"DEBUG: Product: {self.product_ref.name}")
+            print(f"DEBUG: Selling price: {selling_price}")
+            print(f"DEBUG: Quantity: {quantity}")
+            print(f"DEBUG: Calculated revenue: {revenue}")
+
+            # Try to calculate cost, default to 0 if there's an error
+            try:
+                cost = self.product_ref.calculate_cost() * quantity
+                print(f"DEBUG: Calculated cost: {cost}")
+            except Exception as cost_error:
+                print(f"Error calculating cost: {str(cost_error)}")
+                cost = 0
+
+            profit = revenue - cost
+            print(f"DEBUG: Final metrics - Cost: {cost}, Revenue: {revenue}, Profit: {profit}")
+            
+            return {
+                'cost': round(cost, 2),
+                'revenue': round(revenue, 2),
+                'profit': round(profit, 2)
+            }
+        except Exception as e:
+            print(f"Error in calculate_metrics: {str(e)}")
+            # Return a safe fallback
+            return {
+                'cost': 0,
+                'revenue': 0,
+                'profit': 0
+            }
 
 class FinanceOverview(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -147,6 +188,14 @@ class FinanceOverview(db.Model):
     total_income = db.Column(db.Float, nullable=False)
     total_expenses = db.Column(db.Float, nullable=False)
     current_balance = db.Column(db.Float, nullable=False)
+
+class CashTransaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    type = db.Column(db.String(20), nullable=False)  # 'deposit' or 'withdrawal'
+    amount = db.Column(db.Float, nullable=False)
+    notes = db.Column(db.Text)
+    balance_after = db.Column(db.Float, nullable=False)
 
 # Routes
 @app.route('/api/ingredients', methods=['GET', 'POST'])
@@ -156,7 +205,8 @@ def handle_ingredients():
             data = request.json
             
             # Validate required fields
-            required_fields = ['name', 'category_id', 'current_stock', 'stock_unit', 'min_threshold', 'threshold_unit', 'cost_per_unit']
+            required_fields = ['name', 'category_id', 'current_stock', 'stock_unit', 
+                             'min_threshold', 'threshold_unit', 'current_cost_per_unit']
             for field in required_fields:
                 if field not in data:
                     return jsonify({'message': f'Missing required field: {field}'}), 400
@@ -164,7 +214,7 @@ def handle_ingredients():
                     return jsonify({'message': f'Field cannot be empty: {field}'}), 400
             
             # Validate numeric fields
-            numeric_fields = ['current_stock', 'min_threshold', 'cost_per_unit']
+            numeric_fields = ['current_stock', 'min_threshold', 'current_cost_per_unit']
             for field in numeric_fields:
                 try:
                     float(data[field])
@@ -176,14 +226,19 @@ def handle_ingredients():
             if not category:
                 return jsonify({'message': 'Invalid category ID'}), 400
             
+            # Get values from request
+            current_stock = float(data['current_stock'])
+            min_threshold = float(data['min_threshold'])
+            current_cost_per_unit = float(data['current_cost_per_unit'])
+            
             ingredient = Ingredient(
                 name=data['name'],
                 category_id=data['category_id'],
-                current_stock=float(data['current_stock']),
+                current_stock=current_stock,
                 stock_unit=data['stock_unit'],
-                min_threshold=float(data['min_threshold']),
+                min_threshold=min_threshold,
                 threshold_unit=data['threshold_unit'],
-                cost_per_unit=float(data['cost_per_unit']),
+                current_cost_per_unit=current_cost_per_unit,
                 cost_unit=data['stock_unit']
             )
             
@@ -192,19 +247,7 @@ def handle_ingredients():
             
             return jsonify({
                 'message': 'Ingredient added successfully',
-                'ingredient': {
-                    'id': ingredient.id,
-                    'name': ingredient.name,
-                    'category_id': ingredient.category_id,
-                    'category_name': ingredient.category_ref.name,
-                    'current_stock': ingredient.current_stock,
-                    'stock_unit': ingredient.stock_unit,
-                    'min_threshold': ingredient.min_threshold,
-                    'threshold_unit': ingredient.threshold_unit,
-                    'cost_per_unit': ingredient.cost_per_unit,
-                    'cost_unit': ingredient.cost_unit,
-                    'low_stock': ingredient.get_stock_in_base_unit() <= ingredient.get_threshold_in_base_unit()
-                }
+                'ingredient': ingredient.to_dict()
             }), 201
         except Exception as e:
             print('Error creating ingredient:', str(e))
@@ -213,19 +256,7 @@ def handle_ingredients():
     
     # GET request - return ingredients with category information
     ingredients = Ingredient.query.join(IngredientCategory).order_by(IngredientCategory.name, Ingredient.name).all()
-    return jsonify([{
-        'id': i.id,
-        'name': i.name,
-        'category_id': i.category_id,
-        'category_name': i.category_ref.name,
-        'current_stock': i.current_stock,
-        'stock_unit': i.stock_unit,
-        'min_threshold': i.min_threshold,
-        'threshold_unit': i.threshold_unit,
-        'cost_per_unit': i.cost_per_unit,
-        'cost_unit': i.cost_unit,
-        'low_stock': i.get_stock_in_base_unit() <= i.get_threshold_in_base_unit()
-    } for i in ingredients])
+    return jsonify([i.to_dict() for i in ingredients])
 
 @app.route('/api/ingredients/<int:id>', methods=['GET', 'PUT', 'DELETE'])
 def handle_ingredient(id):
@@ -236,7 +267,7 @@ def handle_ingredient(id):
             data = request.json
             
             # Validate required fields
-            required_fields = ['name', 'category_id', 'current_stock', 'stock_unit', 'min_threshold', 'threshold_unit', 'cost_per_unit']
+            required_fields = ['name', 'category_id', 'current_stock', 'stock_unit', 'min_threshold', 'threshold_unit', 'current_cost_per_unit']
             for field in required_fields:
                 if field not in data:
                     return jsonify({'message': f'Missing required field: {field}'}), 400
@@ -244,7 +275,7 @@ def handle_ingredient(id):
                     return jsonify({'message': f'Field cannot be empty: {field}'}), 400
             
             # Validate numeric fields
-            numeric_fields = ['current_stock', 'min_threshold', 'cost_per_unit']
+            numeric_fields = ['current_stock', 'min_threshold', 'current_cost_per_unit']
             for field in numeric_fields:
                 try:
                     float(data[field])
@@ -252,21 +283,32 @@ def handle_ingredient(id):
                     return jsonify({'message': f'Invalid numeric value for {field}'}), 400
             
             # Validate category exists
-            category = IngredientCategory.query.get(data['category_id'])
-            if not category:
-                return jsonify({'message': 'Invalid category ID'}), 400
+            if data['category_id'] != ingredient.category_id:
+                category = IngredientCategory.query.get(data['category_id'])
+                if not category:
+                    return jsonify({'message': 'Invalid category ID'}), 400
             
+            # Get values from request
+            current_stock = float(data['current_stock'])
+            min_threshold = float(data['min_threshold'])
+            current_cost_per_unit = float(data['current_cost_per_unit'])
+            
+            # Update ingredient
             ingredient.name = data['name']
             ingredient.category_id = data['category_id']
-            ingredient.current_stock = float(data['current_stock'])
-            ingredient.stock_unit = data['stock_unit']
-            ingredient.min_threshold = float(data['min_threshold'])
-            ingredient.threshold_unit = data['threshold_unit']
-            ingredient.cost_per_unit = float(data['cost_per_unit'])
-            ingredient.cost_unit = data['stock_unit']
+            ingredient.current_stock = current_stock
+            ingredient.stock_unit = data['stock_unit']  
+            ingredient.min_threshold = min_threshold
+            ingredient.threshold_unit = data['threshold_unit']  
+            ingredient.current_cost_per_unit = current_cost_per_unit
+            ingredient.cost_unit = data['stock_unit']  
             
             db.session.commit()
-            return jsonify({'message': 'Ingredient updated successfully'})
+            
+            return jsonify({
+                'message': 'Ingredient updated successfully',
+                'ingredient': ingredient.to_dict()
+            })
         except Exception as e:
             print('Error updating ingredient:', str(e))
             db.session.rollback()
@@ -281,6 +323,9 @@ def handle_ingredient(id):
             print('Error deleting ingredient:', str(e))
             db.session.rollback()
             return jsonify({'message': f'Error deleting ingredient: {str(e)}'}), 500
+    
+    # GET request
+    return jsonify(ingredient.to_dict())
 
 @app.route('/api/ingredient-categories', methods=['GET', 'POST'])
 def handle_ingredient_categories():
@@ -533,15 +578,120 @@ def handle_sales():
     if request.method == 'POST':
         try:
             data = request.json
+            
+            # Get the product and validate it exists
+            product = Product.query.get(data['product_id'])
+            if not product:
+                return jsonify({'message': 'Product not found'}), 404
+
+            # Check if we have enough stock for all ingredients
+            quantity = data['quantity']
+            
+            # Skip stock check if product has no ingredients
+            if product.ingredients:
+                for product_ingredient in product.ingredients:
+                    ingredient = product_ingredient.ingredient_ref
+                    print(f"DEBUG: Processing ingredient {ingredient.name}")
+                    print(f"DEBUG: Recipe requires {product_ingredient.quantity} {product_ingredient.unit}")
+                    print(f"DEBUG: Sale quantity is {quantity}")
+                    print(f"DEBUG: Current stock is {ingredient.current_stock} {ingredient.stock_unit}")
+                    
+                    # First convert recipe amount to base unit (g/ml)
+                    recipe_amount_base = convert_to_base_unit(
+                        product_ingredient.quantity * quantity,
+                        product_ingredient.unit
+                    )
+                    
+                    # Convert current stock to base unit
+                    current_stock_base = convert_to_base_unit(
+                        ingredient.current_stock,
+                        ingredient.stock_unit
+                    )
+                    
+                    print(f"DEBUG: Recipe needs {recipe_amount_base}g")
+                    print(f"DEBUG: Current stock is {current_stock_base}g")
+                    
+                    # Check if we have enough stock
+                    if current_stock_base < recipe_amount_base:
+                        return jsonify({
+                            'message': f'Insufficient stock for ingredient: {ingredient.name}. ' +
+                                     f'Need {recipe_amount_base}g but only have {current_stock_base}g'
+                        }), 400
+
+                    # Calculate new stock in base unit
+                    new_stock_base = current_stock_base - recipe_amount_base
+                    print(f"DEBUG: New stock will be {new_stock_base}g")
+                    
+                    # Convert new stock back to stock unit
+                    new_stock = convert_from_base_unit(
+                        new_stock_base,
+                        ingredient.stock_unit
+                    )
+                    print(f"DEBUG: Setting new stock to {new_stock} {ingredient.stock_unit}")
+                    
+                    # Update the stock
+                    ingredient.current_stock = round(new_stock, 3)
+
+            # Create the sale
             sale = Sale(
                 date=datetime.fromisoformat(data['date']),
                 product_id=data['product_id'],
-                quantity=data['quantity']
+                quantity=quantity
             )
+            
+            # Calculate metrics
+            metrics = sale.calculate_metrics()
+            if not metrics:
+                return jsonify({'message': 'Error: Could not calculate sale metrics'}), 500
+            
+            # Update finance overview
+            overview = FinanceOverview.query.first()
+            if not overview:
+                overview = FinanceOverview(
+                    starting_balance=10000,  # Default starting balance
+                    total_income=0,
+                    total_expenses=0,
+                    current_balance=10000
+                )
+                db.session.add(overview)
+            
+            # Calculate sale amount and cost
+            sale_amount = product.selling_price * quantity
+            cost_amount = product.calculate_cost() * quantity if product.ingredients else 0
+            
+            # For debugging
+            print(f"DEBUG: Before sale - Current balance: {overview.current_balance}")
+            print(f"DEBUG: Sale amount: {sale_amount}")
+            
+            # Update finance overview totals and balance
+            overview.total_income += sale_amount
+            if cost_amount > 0:
+                overview.total_expenses += cost_amount
+            overview.current_balance += sale_amount  # Only add sale amount to balance
+            
+            print(f"DEBUG: After sale - Current balance: {overview.current_balance}")
+
+            # Create a cash transaction for the sale revenue
+            transaction = CashTransaction(
+                date=sale.date,
+                type='sale',
+                amount=sale_amount,  
+                notes=f'Sale of {quantity}x {product.name}',
+                balance_after=overview.current_balance
+            )
+            db.session.add(transaction)
+            
+            # Save the sale
             db.session.add(sale)
             db.session.commit()
-            return jsonify({'message': 'Sale created successfully'}), 201
+            
+            return jsonify({
+                'message': 'Sale created successfully',
+                'metrics': metrics
+            }), 201
+            
         except Exception as e:
+            print('Error creating sale:', str(e))
             db.session.rollback()
             return jsonify({'message': f'Error creating sale: {str(e)}'}), 500
     
@@ -561,28 +711,58 @@ def handle_sale(id):
     sale = Sale.query.get_or_404(id)
     
     if request.method == 'GET':
+        metrics = sale.calculate_metrics()
         return jsonify({
             'id': sale.id,
             'date': sale.date.isoformat(),
             'product_id': sale.product_id,
             'product_name': sale.product_ref.name,
             'quantity': sale.quantity,
-            **sale.calculate_metrics()
+            **(metrics if metrics else {})
         })
     
     elif request.method == 'DELETE':
         try:
+            # Calculate metrics before deleting
+            metrics = sale.calculate_metrics()
+            if metrics:
+                # Update finance overview
+                overview = FinanceOverview.query.first()
+                if overview:
+                    # Subtract this sale's numbers from totals
+                    overview.total_income -= metrics['revenue']
+                    overview.total_expenses -= metrics['cost']
+                    overview.current_balance = overview.starting_balance + overview.total_income
+
+            # Return ingredients to stock
+            for product_ingredient in sale.product_ref.ingredients:
+                ingredient = product_ingredient.ingredient_ref
+                required_amount = convert_to_base_unit(
+                    product_ingredient.quantity * sale.quantity,
+                    product_ingredient.unit
+                )
+                
+                # Convert the amount to the ingredient's stock unit
+                amount_in_stock_unit = convert_from_base_unit(
+                    required_amount,
+                    ingredient.stock_unit
+                )
+                
+                # Add back to stock
+                ingredient.current_stock += amount_in_stock_unit
+            
             db.session.delete(sale)
             db.session.commit()
             return jsonify({'message': 'Sale deleted successfully'})
         except Exception as e:
+            print('Error deleting sale:', str(e))
             db.session.rollback()
             return jsonify({'message': f'Error deleting sale: {str(e)}'}), 500
 
 @app.route('/api/low-stock-alerts', methods=['GET'])
 def get_low_stock_alerts():
     low_stock_ingredients = Ingredient.query.filter(
-        Ingredient.get_stock_in_base_unit(Ingredient) <= Ingredient.get_threshold_in_base_unit(Ingredient)
+        Ingredient.current_stock <= Ingredient.min_threshold
     ).all()
     
     return jsonify([{
@@ -595,63 +775,86 @@ def get_low_stock_alerts():
 
 @app.route('/api/stock-updates', methods=['GET', 'POST'])
 def handle_stock_updates():
-    if request.method == 'POST':
+    if request.method == 'GET':
+        stock_updates = StockUpdate.query.order_by(StockUpdate.date.desc()).all()
+        return jsonify([{
+            'id': update.id,
+            'ingredient_id': update.ingredient_id,
+            'ingredient_name': update.ingredient.name,
+            'category_name': update.ingredient.category_ref.name,
+            'quantity': update.quantity,
+            'original_unit': update.original_unit,
+            'original_cost_per_unit': update.original_cost_per_unit,
+            'cost_unit': update.cost_unit,
+            'notes': update.notes,
+            'date': update.date.isoformat()
+        } for update in stock_updates])
+
+    elif request.method == 'POST':
         try:
             data = request.json
+            print("Received stock update data:", data)
             
-            # Validate required fields
-            required_fields = ['ingredient_id', 'quantity', 'cost_per_unit']
-            for field in required_fields:
-                if field not in data:
-                    return jsonify({'message': f'Missing required field: {field}'}), 400
+            # Get the ingredient
+            ingredient = Ingredient.query.get(data['ingredient_id'])
+            if not ingredient:
+                return jsonify({'message': 'Ingredient not found'}), 404
             
-            ingredient = Ingredient.query.get_or_404(data['ingredient_id'])
-            
-            # Calculate total cost
-            total_cost = data['quantity'] * data['cost_per_unit']
-            
-            # Create stock update record
+            # Create the stock update
             stock_update = StockUpdate(
                 ingredient_id=data['ingredient_id'],
                 quantity=data['quantity'],
-                cost_per_unit=data['cost_per_unit'],
-                total_cost=total_cost,
+                original_unit=data['unit'],
+                original_cost_per_unit=data['cost_per_unit'],
+                cost_unit=data['cost_unit'],
+                date=datetime.fromisoformat(data['date']),
                 notes=data.get('notes', '')
             )
             
-            # Update ingredient stock
-            ingredient.current_stock += data['quantity']
-            # Update ingredient cost per unit with weighted average
-            total_old_value = ingredient.current_stock * ingredient.cost_per_unit
-            total_new_value = data['quantity'] * data['cost_per_unit']
-            new_total_stock = ingredient.current_stock + data['quantity']
-            ingredient.cost_per_unit = (total_old_value + total_new_value) / new_total_stock
+            # Convert quantity to match the ingredient's stock unit
+            if stock_update.original_unit != ingredient.stock_unit:
+                # First convert to base unit
+                base_quantity = convert_to_base_unit(
+                    stock_update.quantity,
+                    stock_update.original_unit
+                )
+                # Then convert to stock unit
+                stock_quantity = convert_from_base_unit(
+                    base_quantity,
+                    ingredient.stock_unit
+                )
+            else:
+                stock_quantity = stock_update.quantity
             
+            # Update the ingredient's stock and cost
+            ingredient.current_stock += stock_quantity
+            
+            # If cost unit matches, update the cost directly
+            if stock_update.cost_unit == ingredient.cost_unit:
+                ingredient.current_cost_per_unit = stock_update.original_cost_per_unit
+            else:
+                # Convert cost to match the ingredient's cost unit
+                if stock_update.cost_unit in ['kg', 'l'] and ingredient.cost_unit in ['g', 'ml']:
+                    # If update is per kg but ingredient tracks per g, divide by 1000
+                    ingredient.current_cost_per_unit = stock_update.original_cost_per_unit / 1000
+                elif stock_update.cost_unit in ['g', 'ml'] and ingredient.cost_unit in ['kg', 'l']:
+                    # If update is per g but ingredient tracks per kg, multiply by 1000
+                    ingredient.current_cost_per_unit = stock_update.original_cost_per_unit * 1000
+            
+            # Save everything
             db.session.add(stock_update)
             db.session.commit()
             
             return jsonify({
-                'message': 'Stock update recorded successfully',
-                'new_stock_level': ingredient.current_stock,
-                'new_cost_per_unit': ingredient.cost_per_unit
+                'message': 'Stock update created successfully',
+                'current_stock': ingredient.current_stock,
+                'current_cost_per_unit': ingredient.current_cost_per_unit
             }), 201
+            
         except Exception as e:
-            print('Error recording stock update:', str(e))
+            print('Error creating stock update:', str(e))
             db.session.rollback()
-            return jsonify({'message': f'Error recording stock update: {str(e)}'}), 500
-    
-    # GET request - return all stock updates with ingredient details
-    stock_updates = StockUpdate.query.order_by(StockUpdate.date.desc()).all()
-    return jsonify([{
-        'id': su.id,
-        'ingredient_name': su.ingredient.name,
-        'quantity': su.quantity,
-        'unit': su.ingredient.stock_unit,
-        'cost_per_unit': su.cost_per_unit,
-        'total_cost': su.total_cost,
-        'date': su.date.isoformat(),
-        'notes': su.notes
-    } for su in stock_updates])
+            return jsonify({'message': f'Error creating stock update: {str(e)}'}), 500
 
 @app.route('/api/stock-updates/<int:id>', methods=['DELETE'])
 def handle_stock_update(id):
@@ -664,9 +867,9 @@ def handle_stock_update(id):
         
         # Revert the cost per unit (simplified version)
         if ingredient.current_stock > 0:
-            total_value = (ingredient.current_stock + stock_update.quantity) * ingredient.cost_per_unit
-            total_value -= stock_update.quantity * stock_update.cost_per_unit
-            ingredient.cost_per_unit = total_value / ingredient.current_stock
+            total_value = (ingredient.current_stock + stock_update.quantity) * ingredient.current_cost_per_unit
+            total_value -= stock_update.quantity * stock_update.original_cost_per_unit
+            ingredient.current_cost_per_unit = total_value / ingredient.current_stock
         
         db.session.delete(stock_update)
         db.session.commit()
@@ -680,6 +883,17 @@ def handle_stock_update(id):
 @app.route('/api/finance', methods=['GET'])
 def get_finance_overview():
     overview = FinanceOverview.query.first()
+    if not overview:
+        # Initialize finance overview if it doesn't exist
+        overview = FinanceOverview(
+            starting_balance=10000.0,
+            total_income=0.0,
+            total_expenses=0.0,
+            current_balance=10000.0
+        )
+        db.session.add(overview)
+        db.session.commit()
+        
     return jsonify({
         'starting_balance': overview.starting_balance,
         'total_income': overview.total_income,
@@ -748,52 +962,136 @@ def get_profit_report():
                 current += timedelta(days=1)
         
         for sale in sales:
-            # Get the date key based on the interval
-            date_key = sale.date.strftime(group_format)
-            
-            # Calculate metrics for this sale
             metrics = sale.calculate_metrics()
-            revenue = metrics['revenue']
-            cost = metrics['cost']
-            profit = metrics['profit']
+            if not metrics:
+                continue
+                
+            key = sale.date.strftime(group_format)
+            profits[key]['revenue'] += metrics['revenue']
+            profits[key]['cost'] += metrics['cost']
+            profits[key]['profit'] = profits[key]['revenue'] - profits[key]['cost']
+            profits[key]['sales_count'] += 1
             
-            # Add to totals
-            total_revenue += revenue
-            total_cost += cost
-            
-            # Group by interval
-            if date_key in profits:
-                profits[date_key]['revenue'] += revenue
-                profits[date_key]['cost'] += cost
-                profits[date_key]['profit'] += profit
-                profits[date_key]['sales_count'] += 1
-
+            total_revenue += metrics['revenue']
+            total_cost += metrics['cost']
+        
         # Convert to list and sort by date
-        profit_data = [
-            {
-                'date': key,
-                'revenue': data['revenue'],
-                'cost': data['cost'],
-                'profit': data['profit'],
-                'sales_count': data['sales_count']
-            }
-            for key, data in profits.items()
-        ]
-        profit_data.sort(key=lambda x: x['date'])
-
+        data = [{
+            'date': key,
+            'revenue': values['revenue'],
+            'cost': values['cost'],
+            'profit': values['profit'],
+            'sales_count': values['sales_count']
+        } for key, values in profits.items()]
+        data.sort(key=lambda x: x['date'])
+        
         return jsonify({
-            'period': period,
-            'start_date': start_date.isoformat(),
-            'end_date': end_date.isoformat(),
+            'data': data,
             'total_revenue': total_revenue,
             'total_cost': total_cost,
             'total_profit': total_revenue - total_cost,
-            'data': profit_data
+            'period': period,
+            'start_date': start_date.isoformat(),
+            'end_date': end_date.isoformat()
         })
-
+        
     except Exception as e:
         print('Error getting profit report:', str(e))
         return jsonify({'message': f'Error getting profit report: {str(e)}'}), 500
+
+@app.route('/api/debug/ingredient/<int:id>', methods=['GET'])
+def debug_ingredient(id):
+    ingredient = Ingredient.query.get_or_404(id)
+    return jsonify({
+        'id': ingredient.id,
+        'name': ingredient.name,
+        'current_cost_per_unit': ingredient.current_cost_per_unit,
+        'cost_unit': ingredient.cost_unit,
+        'stock_updates': [{
+            'quantity': update.quantity,
+            'original_unit': update.original_unit,
+            'original_cost_per_unit': update.original_cost_per_unit,
+            'cost_unit': update.cost_unit,
+            'date': update.date.isoformat()
+        } for update in ingredient.stock_updates]
+    })
+
+@app.route('/api/cash-transactions', methods=['GET', 'POST'])
+def handle_cash_transactions():
+    if request.method == 'POST':
+        try:
+            data = request.json
+            transaction_type = data['type']
+            amount = float(data['amount'])
+            notes = data.get('notes', '')
+
+            # Get current balance
+            overview = FinanceOverview.query.first()
+            if not overview:
+                return jsonify({'message': 'Finance overview not found'}), 404
+
+            # For debugging
+            print(f"DEBUG: Before transaction - Current balance: {overview.current_balance}")
+            print(f"DEBUG: Transaction type: {transaction_type}")
+            print(f"DEBUG: Amount: {amount}")
+
+            # Calculate new balance based on transaction type
+            if transaction_type == 'deposit':
+                # For deposits, just add to current balance (don't affect total_income)
+                new_balance = overview.current_balance + amount
+            else:  # withdrawal
+                # For withdrawals, check if we have enough funds
+                if overview.current_balance < amount:
+                    return jsonify({'message': 'Insufficient funds'}), 400
+                new_balance = overview.current_balance - amount
+
+            print(f"DEBUG: New balance: {new_balance}")
+
+            # Create transaction with proper amount sign
+            transaction = CashTransaction(
+                type=transaction_type,
+                amount=amount if transaction_type in ['deposit', 'sale'] else -amount,  
+                notes=notes,
+                balance_after=new_balance
+            )
+            
+            # Update current balance only (don't modify total_income or total_expenses)
+            overview.current_balance = new_balance
+
+            db.session.add(transaction)
+            db.session.commit()
+
+            # For debugging
+            print(f"DEBUG: After commit - Current balance: {overview.current_balance}")
+            print(f"DEBUG: Total income: {overview.total_income}")  # Should not change for deposits/withdrawals
+            
+            return jsonify({
+                'message': f'Cash {transaction_type} successful',
+                'transaction': {
+                    'id': transaction.id,
+                    'date': transaction.date.isoformat(),
+                    'type': transaction.type,
+                    'amount': transaction.amount,
+                    'notes': transaction.notes,
+                    'balance_after': transaction.balance_after
+                }
+            }), 201
+
+        except Exception as e:
+            print('Error creating cash transaction:', str(e))
+            db.session.rollback()
+            return jsonify({'message': f'Error creating cash transaction: {str(e)}'}), 500
+
+    # GET method
+    transactions = CashTransaction.query.order_by(CashTransaction.date.desc()).all()
+    return jsonify([{
+        'id': t.id,
+        'date': t.date.isoformat(),
+        'type': t.type,
+        'amount': t.amount,
+        'notes': t.notes,
+        'balance_after': t.balance_after
+    } for t in transactions])
 
 @app.route('/api/health')
 def health_check():

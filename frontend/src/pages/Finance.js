@@ -13,7 +13,8 @@ import {
   TextField,
   Stack,
   IconButton,
-  Tooltip
+  Tooltip,
+  Divider
 } from '@mui/material';
 import {
   BarChart,
@@ -30,6 +31,7 @@ import {
   ChevronRight as ChevronRightIcon,
   Today as TodayIcon
 } from '@mui/icons-material';
+import TransactionList from '../components/TransactionList';
 
 const Finance = () => {
   const [period, setPeriod] = useState('daily');
@@ -262,6 +264,10 @@ const Finance = () => {
           </Paper>
         </>
       )}
+      
+      <Box mt={4}>
+        <TransactionList />
+      </Box>
     </Box>
   );
 };
